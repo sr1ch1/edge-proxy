@@ -1,0 +1,48 @@
+# Reference deployment — encodes, as enforced configuration, every runtime
+# requirement the Dockerfile header documents. It is the only supported way to
+# run this image: a bare `docker run` silently drops the sandboxing below
+# (entrypoint.sh fails closed on the /tmp tmpfs requirement only).
+#
+#   DOMAIN=t-<customer-id>.<integrator-domain> ACME_EMAIL=ops@example.com \
+#     docker compose up -d
+#
+# Before first start, on the host (see Dockerfile header):
+#   chown 10001:10001 acme-webroot certs && chmod 700 certs
+#   chown root:10001 frp_token && chmod 640 frp_token
+services:
+  edge-proxy:
+    build: .
+    restart: unless-stopped       # entrypoint exits if frps or nginx dies — restart is the recovery path
+    read_only: true               # rootfs immutable; all writable state on the mounts below
+    tmpfs:
+      # Nothing in the image executes or needs setuid from /tmp (frps.toml,
+      # nginx pid/temp, lego migrate scratch) — noexec,nosuid remove both as
+      # post-compromise second-stage primitives.
+      - /tmp:noexec,nosuid
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]   # uid 10001 binds :80/:443; file caps are inert under no-new-privileges
+    security_opt:
+      - no-new-privileges:true    # frps/nginx/lego can never re-escalate
+    # Blast-radius limits: a compromised frps must not fork-bomb the host or
+    # fill its disk. 64 pids is ~5x steady state (frps, nginx, lego, sh, sleep,
+    # healthcheck); the :80/:443 access logs stream into the bounded log driver
+    # below, so probe noise can't fill the host disk either.
+    pids_limit: 64
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    ports:
+      - "80:80"                   # ACME HTTP-01 only
+      - "443:443"                 # SNI-multiplexed: wss control channel + app passthrough
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN to t-<customer-id>.<integrator-domain>}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL (LE registration contact)}
+      # FRP_TOKEN must NEVER appear here — file mount only; entrypoint refuses env.
+    volumes:
+      - ./acme-webroot:/var/www/acme            # HTTP-01 webroot (host: uid 10001:10001)
+      - ./certs:/certs                          # lego account + domain keys (host: uid 10001, mode 700)
+      - ./frp_token:/run/secrets/frp_token:ro   # per-customer shared secret (host: root:10001, mode 640)
+                                               # generate with: openssl rand -base64 32 (see Dockerfile header)

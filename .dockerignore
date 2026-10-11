@@ -1,0 +1,30 @@
+# Build context should carry only what the image COPYs: entrypoint.sh, nginx.conf.
+.git
+.gitignore
+*.md
+Dockerfile
+Dockerfile.*
+docker-compose*.yml
+.dockerignore
+.github/
+scripts/
+
+# The live bind-mount dirs/files docker-compose.yml mounts from the repo root.
+# Defensive: key/token material must never reach the build context (a future
+# stray file would otherwise be sniffable in the context and, if COPY'd, in
+# layers). The dirs are excluded wholesale — lego's *.json state (domains,
+# account IDs, ACME URLs) is metadata, not just keys, and must not ship either.
+certs/
+certs.bak-*/
+acme-webroot/
+frp_token
+*.key
+*.pem
+*.crt
+*.csr
+*.p12
+*.pfx
+.env
+.env.*
+secrets/
+tokens/

@@ -1,0 +1,62 @@
+# Reference sidecar (frpc) configuration for edge-proxy — the trust contract
+# from the Dockerfile header / README, spelled out as a working config.
+#
+# This is the part of the trust model the edge image cannot enforce from its
+# side of the connection: frp's client TLS defaults defeat server
+# authentication (InsecureSkipVerify=true whenever trustedCaFile is unset —
+# frp source: pkg/transport/tls.go), and the wire protocol defaults to v1
+# (frp source: pkg/config/v1/client.go — util.EmptyOr(c.WireProtocol, "v1");
+# v2 must be enabled EXPLICITLY despite being supported since frp 0.52).
+# Both lines below are load-bearing; do not trim this file down to "the
+# minimum that connects" — that minimum has no server authentication.
+#
+# Generate the token with: openssl rand -base64 32
+# (32+ chars is an entrypoint-enforced floor on the edge side too).
+
+serverAddr = "t-<customer-id>.<integrator-domain>"   # = edge-proxy DOMAIN
+serverPort = 443                                     # single public port, SNI-multiplexed
+
+auth.method = "token"
+auth.token = "<32+ char random token>"   # must match the edge's frp_token file
+
+# --- the trust contract (REQUIRED) -------------------------------------------
+# wss control channel: TLS-terminated by the edge's nginx at the t-* SNI route.
+transport.protocol = "wss"
+
+# Verify the edge's certificate against the system CA bundle. Without
+# trustedCaFile, frpc skips verification entirely and an on-path attacker can
+# impersonate the edge (blackhole or relay the tunnel) even AFTER issuance.
+transport.tls.enable = true
+transport.tls.serverName = "t-<customer-id>.<integrator-domain>"   # = DOMAIN
+transport.tls.trustedCaFile = "/etc/ssl/certs/ca-certificates.crt"
+
+# Authenticated message layer. NOT the default — frp still defaults to v1,
+# whose message layer is unauthenticated AES-CFB and whose token login is
+# md5(token||timestamp) with no server-side freshness check (replayable if a
+# login frame ever becomes readable). Never remove this line.
+transport.wireProtocol = "v2"
+
+# --- proxies -----------------------------------------------------------------
+# Exactly the two remote ports the edge's frps allowPorts permits. The token
+# is a per-customer shared secret, so the edge restricts what it can claim;
+# requesting anything else is refused server-side.
+
+# Application passthrough: edge :443 with any SNI other than the control
+# DOMAIN lands here raw (TLS end-to-end — the edge never sees plaintext).
+[[proxies]]
+name = "app"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 443        # the customer app's TLS listener
+remotePort = 7443
+
+# ACME relay: edge :80 relays /.well-known/acme-challenge/ for names it does
+# not serve itself; this lands on the sidecar's own ACME responder. The edge
+# overwrites X-Forwarded-For with the verified peer address — read that, not
+# any client-supplied chain, when answering challenges for your domains.
+[[proxies]]
+name = "acme"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 80         # the sidecar's ACME HTTP-01 responder
+remotePort = 8080

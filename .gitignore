@@ -1,0 +1,16 @@
+# docker-compose.yml bind-mounts live runtime state from the repo root: the
+# per-customer FRP shared secret and the ACME account/domain private keys.
+# NEVER commit these — a leaked token lets any holder impersonate the tunnel;
+# a leaked account key impersonates the ACME account.
+/frp_token
+/certs/
+/acme-webroot/
+
+# On-host cert backups made per the Dockerfile header bump procedure
+# (cp -a certs certs.bak-<date>). No trailing slash — matches the backup dir
+# (or any stray file) whether or not git has seen it as a directory.
+/certs.bak-*
+
+# Local compose environment files (may carry DOMAIN/ACME_EMAIL or tokens).
+.env
+.env.*
